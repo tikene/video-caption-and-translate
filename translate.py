@@ -1,14 +1,9 @@
 import argparse
 import re
 import os
-import subprocess
 from openai import OpenAI
-from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
-from moviepy.video.tools.subtitles import SubtitlesClip
-from moviepy.config import change_settings
 from faster_whisper import WhisperModel
 import yt_dlp
-import shlex
 import unicodedata
 import ffmpeg
 
@@ -173,10 +168,6 @@ def save_translated_srt(translated_srt, target_language, output_dir, filename='t
     print(f"Translated subtitles saved to: {full_path}")
     return full_path
 
-def time_to_seconds(time_str):
-    h, m, s = time_str.split(':')
-    return int(h) * 3600 + int(m) * 60 + float(s.replace(',', '.'))
-
 def get_video_dimensions(video_path):
     probe = ffmpeg.probe(video_path)
     video_info = next(s for s in probe['streams'] if s['codec_type'] == 'video')
@@ -243,7 +234,7 @@ def main():
     parser.add_argument("--models_path", default="Models", help="Path to store Whisper models")
     parser.add_argument("--openai_api_key", help="OpenAI API key")
     parser.add_argument("--font", default="NanumGothic", help="Font to use for subtitles")
-    parser.add_argument("--use_chatgpt_whisper", action="store_true", help="Use ChatGPT's Whisper model for transcription", default=True)
+    parser.add_argument("--use_local_whisper", action="store_true", help="Use local Whisper model for transcription instead of ChatGPT's Whisper")
     
     args = parser.parse_args()
     
@@ -270,10 +261,10 @@ def main():
 
     # Transcribe audio from video
     print("Transcribing audio...")
-    if args.use_chatgpt_whisper:
-        transcript = transcribe_audio_chatgpt(client, video_path)
-    else:
+    if args.use_local_whisper:
         transcript = transcribe_audio(video_path, args.models_path)
+    else:
+        transcript = transcribe_audio_chatgpt(client, video_path)
     print(f"Audio transcribed!\n")
     print(transcript)
 
