@@ -18,17 +18,17 @@ Here are some examples of the script in action:
 ![American Psycho - Korean](https://github.com/user-attachments/assets/5c76cd45-6221-4ef1-a6bc-367affa5dbe6)
 
 
-3. **English to Spanish Translation**
+2. **English to Spanish Translation**
 
 ![Meet the Spy - Spanish](https://github.com/user-attachments/assets/284a9e8d-1fd6-4fbf-bcdb-24a8e284d32f)
 
 
-5. **German to English Translation**
+3. **German to English Translation**
 
 ![Adolf Hitler Speech - German](https://github.com/user-attachments/assets/76d67ac5-d5a7-46b2-8a24-addb8dff24af)
 
 
-7. **Spanish to English Translation**
+4. **Spanish to English Translation**
 
 ![El hoyo - Spanish](https://github.com/user-attachments/assets/50a33248-83c6-49a7-8d50-42eb735dfe87)
 
