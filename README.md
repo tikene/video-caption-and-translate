@@ -4,8 +4,6 @@
 
 A Python script that automates video subtitle creation & translation, supporting both local files and online video URLs.
 
-<br>
-
 ## 🚀 Features
 
 - Download videos from various platforms (YouTube, Twitter, Facebook, Instagram, etc.)
