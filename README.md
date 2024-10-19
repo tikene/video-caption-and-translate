@@ -115,8 +115,8 @@ The script generates the following files in the output directory:
 ## ⚠️ Important Notes
 
 - Ensure you have a valid OpenAI API key with sufficient credits.
-- The script uses the GPT-4 model for translation, which may incur costs on your OpenAI account (approximately 2-3 cents for a two-minute video).
-- Large videos may not work and/or significantly increase costs. Testing has been limited to videos up to 5 minutes in length.
+- The script uses the GPT-4o model for translation, which may incur costs on your OpenAI account (approximately 1-3 cents for a two-minute video).
+- Large videos may not work and/or significantly increase costs. Testing has been limited to short videos (up to 5 minutes in length).
 
 
 
