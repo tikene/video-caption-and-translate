@@ -1,6 +1,3 @@
-<meta name="google-site-verification" content="nlVEZTuGxiDKg4as7051HTko0hloB1UvMrlhSM4Kx10" />
-<meta name="google-site-verification" content="5HsTjWltDdpXidi_6az1nlKyAH94d5NL36wWaDFv_RQ" />
-
 # Video Transcriber and Translator
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
