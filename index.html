@@ -1,175 +1,264 @@
-<meta name="google-site-verification" content="nlVEZTuGxiDKg4as7051HTko0hloB1UvMrlhSM4Kx10" />
-<meta name="google-site-verification" content="5HsTjWltDdpXidi_6az1nlKyAH94d5NL36wWaDFv_RQ" />
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="google-site-verification" content="nlVEZTuGxiDKg4as7051HTko0hloB1UvMrlhSM4Kx10" />
+    <meta name="google-site-verification" content="5HsTjWltDdpXidi_6az1nlKyAH94d5NL36wWaDFv_RQ" />
+    <title>Video Transcriber and Translator</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css">
+    <style>
+        .markdown-body {
+            box-sizing: border-box;
+            min-width: 200px;
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 45px;
+        }
+        @media (max-width: 767px) {
+            .markdown-body {
+                padding: 15px;
+            }
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+            margin: 20px 0;
+        }
+        pre {
+            background-color: #f6f8fa;
+            border-radius: 6px;
+            padding: 16px;
+            overflow: auto;
+        }
+        code {
+            background-color: #f6f8fa;
+            padding: 0.2em 0.4em;
+            border-radius: 3px;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+        }
+        .emoji {
+            font-family: "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+            font-size: 1.2em;
+            vertical-align: middle;
+        }
+        .badge {
+            display: inline-block;
+            vertical-align: middle;
+            margin-left: 8px;
+        }
+        .demo-item {
+            margin: 30px 0;
+        }
+        .installation-steps {
+            margin-left: 20px;
+        }
+        .warning {
+            background-color: #fff5f5;
+            border-left: 4px solid #ff4f4f;
+            padding: 10px 15px;
+            margin: 15px 0;
+        }
+        .note {
+            background-color: #f8f9fa;
+            border-left: 4px solid #4f4f4f;
+            padding: 10px 15px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="markdown-body">
+        <h1>
+            Video Transcriber and Translator
+            <a href="https://opensource.org/licenses/MIT" class="badge">
+                <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT">
+            </a>
+        </h1>
 
-# Video Transcriber and Translator
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+        <p>A Python script that automates video subtitle creation & translation, supporting both local files and online video URLs.</p>
 
-A Python script that automates video subtitle creation & translation, supporting both local files and online video URLs.
+        <h2><span class="emoji">🚀</span> Features</h2>
+        <ul>
+            <li>Download videos from various platforms easily by specifying the URL (YouTube, Twitter, Facebook, Instagram, etc.)</li>
+            <li>Transcribe audio using ChatGPT's Whisper model (default) or local Whisper model</li>
+            <li>Translate the generated transcriptions to a target language using OpenAI's GPT models</li>
+            <li>Add translated subtitles to videos</li>
+            <li>Support for multiple languages and resolutions (including YouTube Shorts)</li>
+            <li>Support for long videos, these are split into chunks automatically before transcribing and translating</li>
+        </ul>
 
-## 🚀 Features
-- Download videos from various platforms easily by specifying the URL (YouTube, Twitter, Facebook, Instagram, etc.)
-- Transcribe audio using ChatGPT's Whisper model (default) or local Whisper model
-- Translate the generated transcriptions to a target language using OpenAI's GPT models
-- Add translated subtitles to videos
-- Support for multiple languages and resolutions (including YouTube Shorts)
-- Support for long videos, these are split into chunks automatically before transcribing and translating
+        <h2><span class="emoji">🎬</span> Demo</h2>
+        <p>Here are some examples of the script in action:</p>
 
-## 🎬 Demo
-Here are some examples of the script in action:
+        <div class="demo-item">
+            <h3>1. English to Korean Translation</h3>
+            <img src="https://github.com/user-attachments/assets/5c76cd45-6221-4ef1-a6bc-367affa5dbe6" alt="American Psycho - Korean">
+        </div>
 
-1. **English to Korean Translation**
+        <div class="demo-item">
+            <h3>2. English to Spanish Translation</h3>
+            <img src="https://github.com/user-attachments/assets/284a9e8d-1fd6-4fbf-bcdb-24a8e284d32f" alt="Meet the Spy - Spanish">
+        </div>
 
-![American Psycho - Korean](https://github.com/user-attachments/assets/5c76cd45-6221-4ef1-a6bc-367affa5dbe6)
+        <div class="demo-item">
+            <h3>3. German to English Translation</h3>
+            <img src="https://github.com/user-attachments/assets/76d67ac5-d5a7-46b2-8a24-addb8dff24af" alt="Adolf Hitler Speech - German">
+        </div>
 
+        <div class="demo-item">
+            <h3>4. Spanish to English Translation</h3>
+            <img src="https://github.com/user-attachments/assets/50a33248-83c6-49a7-8d50-42eb735dfe87" alt="El hoyo - Spanish">
+        </div>
 
-2. **English to Spanish Translation**
+        <div class="note">
+            <strong>Note</strong>: Results may vary with accents or background music, especially when using the local model. Video and caption synchronization might be affected when the audio isn't clear. The above clips were processed using OpenAI for both transcription & translation (default script behavior).
+        </div>
 
-![Meet the Spy - Spanish](https://github.com/user-attachments/assets/284a9e8d-1fd6-4fbf-bcdb-24a8e284d32f)
+        <h2><span class="emoji">🖥️</span> Usage</h2>
+        <p>Run the script using the following command:</p>
+        <pre><code>python translate.py video_input target_language [options]</code></pre>
 
+        <h3>Arguments:</h3>
+        <ul>
+            <li><code>video_input</code>: URL or path to the input video file</li>
+            <li><code>target_language</code>: Target language for translation (e.g., Spanish, English, French)</li>
+        </ul>
 
-3. **German to English Translation**
+        <h3>Options:</h3>
+        <ul>
+            <li><code>--output_dir</code>: Directory to save output files (default: "output")</li>
+            <li><code>--models_path</code>: Path to store Whisper models (default: "Models")</li>
+            <li><code>--openai_api_key</code>: OpenAI API key (if not set as an environment variable)</li>
+            <li><code>--font</code>: Font to use for subtitles (default: "NanumGothic")</li>
+            <li><code>--use_local_whisper</code>: Use local Whisper model for transcription instead of ChatGPT's Whisper</li>
+        </ul>
 
-![Adolf Hitler Speech - German](https://github.com/user-attachments/assets/76d67ac5-d5a7-46b2-8a24-addb8dff24af)
+        <h2><span class="emoji">📋</span> Examples</h2>
+        <ol>
+            <li>
+                <p>Translate YouTube video subtitles to Spanish (using default ChatGPT Whisper):</p>
+                <pre><code>python translate.py https://www.youtube.com/watch?v=VIDEO_ID Spanish</code></pre>
+            </li>
+            <li>
+                <p>Translate local video file subtitles to French (using default ChatGPT Whisper):</p>
+                <pre><code>python translate.py /path/to/your/video.mp4 French</code></pre>
+            </li>
+            <li>
+                <p>Use a specific output directory and font:</p>
+                <pre><code>python translate.py input_video.mp4 German --output_dir my_output --font Arial</code></pre>
+            </li>
+            <li>
+                <p>Use a local model for transcription:</p>
+                <pre><code>python translate.py input_video.mp4 Korean --use_local_whisper</code></pre>
+            </li>
+        </ol>
 
+        <h2><span class="emoji">🛠️</span> Installation</h2>
 
-4. **Spanish to English Translation**
+        <h3>1. FFmpeg Installation</h3>
+        
+        <h4>Windows:</h4>
+        <ol class="installation-steps">
+            <li>Download FFmpeg from <a href="https://ffmpeg.org/download.html">ffmpeg.org</a></li>
+            <li>Extract the ZIP file</li>
+            <li>Add the <code>bin</code> folder path to system PATH</li>
+            <li>Verify installation: <code>ffmpeg -version</code></li>
+        </ol>
 
-![El hoyo - Spanish](https://github.com/user-attachments/assets/50a33248-83c6-49a7-8d50-42eb735dfe87)
+        <h4>macOS:</h4>
+        <pre><code>brew install ffmpeg</code></pre>
 
-**Note**: Results may vary with accents or background music, especially when using the local model. Video and caption synchronization might be affected when the audio isn't clear. The above clips were processed using OpenAI for both transcription & translation (default script behavior).
+        <h4>Linux:</h4>
+        <pre><code>sudo apt update
+sudo apt install ffmpeg</code></pre>
 
-## 🖥️ Usage
-Run the script using the following command:
-```bash
-python translate.py video_input target_language [options]
-```
-
-### Arguments:
-- `video_input`: URL or path to the input video file
-- `target_language`: Target language for translation (e.g., Spanish, English, French)
-
-### Options:
-- `--output_dir`: Directory to save output files (default: "output")
-- `--models_path`: Path to store Whisper models (default: "Models")
-- `--openai_api_key`: OpenAI API key (if not set as an environment variable)
-- `--font`: Font to use for subtitles (default: "NanumGothic")
-- `--use_local_whisper`: Use local Whisper model for transcription instead of ChatGPT's Whisper
-
-## 📋 Examples
-1. Translate YouTube video subtitles to Spanish (using default ChatGPT Whisper):
-   ```bash
-   python translate.py https://www.youtube.com/watch?v=VIDEO_ID Spanish
-   ```
-
-2. Translate local video file subtitles to French (using default ChatGPT Whisper):
-   ```bash
-   python translate.py /path/to/your/video.mp4 French
-   ```
-
-3. Use a specific output directory and font:
-   ```bash
-   python translate.py input_video.mp4 German --output_dir my_output --font Arial
-   ```
-
-4. Use a local model for transcription:
-   ```bash
-   python translate.py input_video.mp4 Korean --use_local_whisper
-   ```
-
-## 🛠️ Installation
-
-### 1. FFmpeg Installation
-
-#### Windows:
-1. Download FFmpeg from [ffmpeg.org](https://ffmpeg.org/download.html)
-2. Extract the ZIP file
-3. Add the `bin` folder path to system PATH
-4. Verify installation: `ffmpeg -version`
-
-#### macOS:
-```bash
-brew install ffmpeg
-```
-
-#### Linux:
-```bash
-sudo apt update
-sudo apt install ffmpeg
-```
-
-### 2. Python Dependencies
-Create and activate a virtual environment:
-
-```bash
-python -m venv venv
+        <h3>2. Python Dependencies</h3>
+        <p>Create and activate a virtual environment:</p>
+        <pre><code>python -m venv venv
 source venv/bin/activate  # Linux/macOS
-venv\Scripts\activate     # Windows
-```
+venv\Scripts\activate     # Windows</code></pre>
 
-Install required packages:
-
-```bash
-pip install openai==1.12.0
+        <p>Install required packages:</p>
+        <pre><code>pip install openai==1.12.0
 pip install faster-whisper==0.10.0
 pip install yt-dlp==2024.3.10
 pip install ffmpeg-python==0.2.0
-pip install pydub==0.25.1
-```
+pip install pydub==0.25.1</code></pre>
 
-### 3. OpenAI API Setup
-1. Create account at [platform.openai.com](https://platform.openai.com)
-2. Generate API key in account settings
-3. Set environment variable:
-   ```bash
-   # Linux/macOS
-   export OPENAI_API_KEY='your-key-here'
-   
-   # Windows (PowerShell)
-   $env:OPENAI_API_KEY='your-key-here'
-   ```
+        <h3>3. OpenAI API Setup</h3>
+        <ol class="installation-steps">
+            <li>Create account at <a href="https://platform.openai.com">platform.openai.com</a></li>
+            <li>Generate API key in account settings</li>
+            <li>Set environment variable:
+                <pre><code># Linux/macOS
+export OPENAI_API_KEY='your-key-here'
 
-### 4. Download the repository
+# Windows (PowerShell)
+$env:OPENAI_API_KEY='your-key-here'</code></pre>
+            </li>
+        </ol>
 
-1. Clone repository:
-```bash
-git clone https://github.com/tikene/video-caption-and-translate.git
-cd video-caption-and-translate
-```
+        <h3>4. Download the repository</h3>
+        <ol class="installation-steps">
+            <li>Clone repository:
+                <pre><code>git clone https://github.com/tikene/video-caption-and-translate.git
+cd video-caption-and-translate</code></pre>
+            </li>
+            <li>Verify installation:
+                <pre><code>python translate.py --help</code></pre>
+            </li>
+        </ol>
 
-2. Verify installation:
-```bash
-python translate.py --help
-```
+        <h2><span class="emoji">⏳</span> Common Issues</h2>
 
-## ⏳ Common Issues
+        <h3>FFmpeg Not Found</h3>
+        <ul>
+            <li>Ensure FFmpeg is in system PATH</li>
+            <li>Restart terminal/IDE after PATH changes</li>
+            <li>Check with <code>ffmpeg -version</code></li>
+        </ul>
 
-### FFmpeg Not Found
-- Ensure FFmpeg is in system PATH
-- Restart terminal/IDE after PATH changes
-- Check with `ffmpeg -version`
+        <h3>OpenAI API Errors</h3>
+        <ul>
+            <li>Verify API key is set correctly</li>
+            <li>Check account has sufficient credits</li>
+            <li>Ensure stable internet connection</li>
+        </ul>
 
-### OpenAI API Errors
-- Verify API key is set correctly
-- Check account has sufficient credits
-- Ensure stable internet connection
+        <h2><span class="emoji">📂</span> Output</h2>
+        <p>The script generates the following files in the output directory:</p>
+        <ol>
+            <li>Downloaded video (if URL was provided)</li>
+            <li>Translated SRT subtitle file</li>
+            <li>Video with embedded translated subtitles</li>
+        </ol>
 
-## 📂 Output
-The script generates the following files in the output directory:
-1. Downloaded video (if URL was provided)
-2. Translated SRT subtitle file
-3. Video with embedded translated subtitles
+        <h2><span class="emoji">⚠️</span> Important Notes</h2>
+        <div class="warning">
+            <ul>
+                <li>The script uses the GPT-4 model for translation by default, which costs around $0.1 cents for a two-minute video. You may reduce token costs by switching to 'gpt-4o-mini' which is ~80% cheaper at the expense of translation quality</li>
+                <li>Longer video → Higher costs (duh)</li>
+            </ul>
+        </div>
 
-## ⚠️ Important Notes
-- The script uses the GPT-4 model for translation by default, which costs around $0.1 cents for a two-minute video. You may reduce token costs by switching to 'gpt-4o-mini' which is ~80% cheaper at the expense of translation quality
-- Longer video -> Higher costs (duh)
+        <h2><span class="emoji">📄</span> License</h2>
+        <p>This project is licensed under the MIT License - see the <a href="LICENSE">LICENSE</a> file for details.</p>
 
-## 📄 License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+        <h2>Source Code</h2>
+        <ul>
+            <li><a href="https://github.com/tikene/video-caption-and-translate">View on GitHub</a></li>
+            <li><a href="https://github.com/tikene/video-caption-and-translate/releases/latest">Download Latest Release</a></li>
+            <li><a href="https://github.com/tikene/video-caption-and-translate/issues">Report Issues</a></li>
+        </ul>
 
-## Source Code
-- [View on GitHub](https://github.com/tikene/video-caption-and-translate)
-- [Download Latest Release](https://github.com/tikene/video-caption-and-translate/releases/latest)
-- [Report Issues](https://github.com/tikene/video-caption-and-translate/issues)
-
-## Development
-[![GitHub Stars](https://img.shields.io/github/stars/tikene/video-caption-and-translate?style=social)](https://github.com/tikene/video-caption-and-translate)
+        <h2>Development</h2>
+        <p>
+            <a href="https://github.com/tikene/video-caption-and-translate">
+                <img src="https://img.shields.io/github/stars/tikene/video-caption-and-translate?style=social" alt="GitHub Stars">
+            </a>
+        </p>
+    </div>
+</body>
+</html>
