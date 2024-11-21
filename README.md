@@ -4,11 +4,12 @@
 A Python script that automates video subtitle creation & translation, supporting both local files and online video URLs.
 
 ## 🚀 Features
-- Download videos from various platforms (YouTube, Twitter, Facebook, Instagram, etc.)
+- Download videos from various platforms easily by specifying the URL (YouTube, Twitter, Facebook, Instagram, etc.)
 - Transcribe audio using ChatGPT's Whisper model (default) or local Whisper model
-- Translate transcriptions to a target language using OpenAI's GPT models
+- Translate the generated transcriptions to a target language using OpenAI's GPT models
 - Add translated subtitles to videos
 - Support for multiple languages and resolutions (including YouTube Shorts)
+- Support for long videos, these are split into chunks automatically before transcribing and translating
 
 ## 🎬 Demo
 Here are some examples of the script in action:
@@ -33,27 +34,6 @@ Here are some examples of the script in action:
 ![El hoyo - Spanish](https://github.com/user-attachments/assets/50a33248-83c6-49a7-8d50-42eb735dfe87)
 
 **Note**: Results may vary with accents or background music, especially when using the local model. Video and caption synchronization might be affected when the audio isn't clear. The above clips were processed using OpenAI for both transcription & translation (default script behavior).
-
-## 🛠️ Installation
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/tikene/video-caption-and-translate.git
-   cd video-caption-and-translate
-   ```
-
-2. Install required dependencies:
-   ```bash
-   pip install openai faster_whisper yt-dlp ffmpeg-python
-   ```
-
-3. Install FFmpeg:
-   - Download from [ffmpeg.org](https://ffmpeg.org/download.html)
-   - Add to your system PATH
-
-4. Set up your OpenAI API key:
-   ```bash
-   export OPENAI_API_KEY='your-api-key-here'
-   ```
 
 ## 🖥️ Usage
 Run the script using the following command:
@@ -93,6 +73,83 @@ python translate.py video_input target_language [options]
    python translate.py input_video.mp4 Korean --use_local_whisper
    ```
 
+## 🛠️ Installation
+
+### 1. FFmpeg Installation
+
+#### Windows:
+1. Download FFmpeg from [ffmpeg.org](https://ffmpeg.org/download.html)
+2. Extract the ZIP file
+3. Add the `bin` folder path to system PATH
+4. Verify installation: `ffmpeg -version`
+
+#### macOS:
+```bash
+brew install ffmpeg
+```
+
+#### Linux:
+```bash
+sudo apt update
+sudo apt install ffmpeg
+```
+
+### 2. Python Dependencies
+Create and activate a virtual environment:
+
+```bash
+python -m venv venv
+source venv/bin/activate  # Linux/macOS
+venv\Scripts\activate     # Windows
+```
+
+Install required packages:
+
+```bash
+pip install openai==1.12.0
+pip install faster-whisper==0.10.0
+pip install yt-dlp==2024.3.10
+pip install ffmpeg-python==0.2.0
+pip install pydub==0.25.1
+```
+
+### 3. OpenAI API Setup
+1. Create account at [platform.openai.com](https://platform.openai.com)
+2. Generate API key in account settings
+3. Set environment variable:
+   ```bash
+   # Linux/macOS
+   export OPENAI_API_KEY='your-key-here'
+   
+   # Windows (PowerShell)
+   $env:OPENAI_API_KEY='your-key-here'
+   ```
+
+### 4. Download the repository
+
+1. Clone repository:
+```bash
+git clone https://github.com/tikene/video-caption-and-translate.git
+cd video-caption-and-translate
+```
+
+2. Verify installation:
+```bash
+python translate.py --help
+```
+
+## ⏳ Common Issues
+
+### FFmpeg Not Found
+- Ensure FFmpeg is in system PATH
+- Restart terminal/IDE after PATH changes
+- Check with `ffmpeg -version`
+
+### OpenAI API Errors
+- Verify API key is set correctly
+- Check account has sufficient credits
+- Ensure stable internet connection
+
 ## 📂 Output
 The script generates the following files in the output directory:
 1. Downloaded video (if URL was provided)
@@ -100,9 +157,8 @@ The script generates the following files in the output directory:
 3. Video with embedded translated subtitles
 
 ## ⚠️ Important Notes
-- Ensure you have a valid OpenAI API key with sufficient credits.
-- The script uses the GPT-4o model for translation, which may incur costs on your OpenAI account (approximately 1-3 cents for a two-minute video).
-- Large videos may not work and/or significantly increase costs. Testing has been limited to short videos (up to 5 minutes in length).
+- The script uses the GPT-4 model for translation by default, which costs around $0.1 cents for a two-minute video. You may reduce token costs by switching to 'gpt-4o-mini' which is ~80% cheaper at the expense of translation quality
+- Longer video -> Higher costs (duh)
 
 ## 📄 License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
