@@ -6,8 +6,12 @@ from faster_whisper import WhisperModel
 import yt_dlp
 import unicodedata
 import ffmpeg
-
-
+import math
+from pydub import AudioSegment
+import tempfile
+import shutil 
+import subprocess
+import json
 
 def sanitize_filename(filename):
     # Remove non-ASCII characters
@@ -52,7 +56,117 @@ def download_video(url, output_path):
     
     return filename
 
+def split_audio(audio_path, max_size_mb=25):
+    """Split audio file into chunks smaller than max_size_mb"""
+    max_size_bytes = max_size_mb * 1024 * 1024
+    print(f"Loading audio file: {audio_path}")
+    
+    try:
+        audio = AudioSegment.from_mp3(audio_path)
+        duration_ms = len(audio)
+        
+        # Calculate chunk size based on original file size and duration
+        file_size = os.path.getsize(audio_path)
+        ms_per_mb = duration_ms / (file_size / 1024 / 1024)
+        chunk_duration_ms = int(ms_per_mb * (max_size_mb * 0.95))  # 5% safety margin
+        
+        chunks = []
+        temp_dir = tempfile.mkdtemp()
+        print(f"Created temporary directory: {temp_dir}")
+        
+        # Split audio into chunks
+        for i, start in enumerate(range(0, duration_ms, chunk_duration_ms)):
+            end = min(start + chunk_duration_ms, duration_ms)
+            chunk = audio[start:end]
+            
+            # Export chunk with optimal settings
+            chunk_path = os.path.join(temp_dir, f'chunk_{i}.mp3')
+            print(f"Exporting chunk {i+1} to: {chunk_path}")
+            
+            chunk.export(
+                chunk_path,
+                format="mp3",
+                parameters=[
+                    "-ac", "1",  # Mono audio
+                    "-ar", "16000",  # 16kHz sample rate
+                    "-q:a", "9"  # Lowest quality (highest compression)
+                ]
+            )
+            
+            # Verify chunk size
+            chunk_size = os.path.getsize(chunk_path)
+            if chunk_size > max_size_bytes:
+                raise ValueError(
+                    f"Chunk {i} size ({chunk_size/1024/1024:.2f}MB) exceeds limit "
+                    f"({max_size_mb}MB) after compression"
+                )
+            
+            chunks.append(chunk_path)
+            print(f"Chunk {i+1} size: {chunk_size/1024/1024:.2f}MB")
+        
+        return chunks, temp_dir
+        
+    except Exception as e:
+        print(f"Error splitting audio: {str(e)}")
+        if 'temp_dir' in locals() and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        raise
 
+
+def transcribe_audio_chatgpt(client, audio_path):
+    """Modified transcription function to handle large files"""
+    # First extract audio in optimal format
+    audio_mp3_path = extract_audio(audio_path)
+    temp_dir = None
+    try:
+        # Check if file is larger than 24MB
+        if os.path.getsize(audio_mp3_path) > 1024 * 1024 * 24:
+            print("Audio file larger than 25MB, splitting into chunks...")
+            chunks, temp_dir = split_audio(audio_mp3_path)
+            
+            # Process each chunk
+            all_segments = []
+            for i, chunk_path in enumerate(chunks):
+                print(f"Processing chunk {i+1}/{len(chunks)}...")
+                with open(chunk_path, "rb") as audio_file:
+                    response = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file,
+                        response_format="verbose_json"
+                    )
+                    
+                    # Adjust timestamps for chunks after the first
+                    time_offset = i * (25 * 60)  # Approximate offset based on chunk duration
+                    for segment in response.segments:
+                        segment.start += time_offset
+                        segment.end += time_offset
+                        all_segments.append(segment)
+        else:
+            # Process single file if under 25MB
+            with open(audio_mp3_path, "rb") as audio_file:
+                response = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    response_format="verbose_json"
+                )
+                all_segments = response.segments
+        
+        # Generate transcript with adjusted timestamps
+        transcript = ""
+        for i, segment in enumerate(all_segments, start=1):
+            start_time = format_timestamp(segment.start)
+            end_time = format_timestamp(segment.end)
+            transcript += f"{i}\n{start_time} --> {end_time}\n{segment.text.strip()}\n\n"
+        
+        return transcript
+            
+    finally:
+        # Clean up temporary files
+        if os.path.exists(audio_mp3_path):
+            os.remove(audio_mp3_path)
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+            
 def transcribe_audio(audio_path, cache_path, model_size="large-v3"):
     model = WhisperModel(model_size, device="cpu", compute_type="int8", download_root=cache_path)
     
@@ -68,24 +182,57 @@ def transcribe_audio(audio_path, cache_path, model_size="large-v3"):
     
     return transcript
 
-def transcribe_audio_chatgpt(client, audio_path):
-    with open(audio_path, "rb") as audio_file:
-        response = client.audio.transcriptions.create(
-            model="whisper-1", 
-            file=audio_file,
-            response_format="verbose_json"
-        )
-    
-    transcript = ""
-    for i, segment in enumerate(response.segments, start=1):
-        start_time = format_timestamp(segment.start)
-        end_time = format_timestamp(segment.end)
-        transcript += f"{i}\n{start_time} --> {end_time}\n{segment.text.strip()}\n\n"
-    
-    print(f"Detected language '{response.language}'")
-    
-    return transcript
 
+def extract_audio(video_path, output_path=None):
+    """Extract audio from video file using ffmpeg command line with proper encoding handling"""
+    if output_path is None:
+        output_path = os.path.splitext(video_path)[0] + '.mp3'
+    
+    try:
+        # Check if ffmpeg is installed
+        if not shutil.which('ffmpeg'):
+            raise RuntimeError("ffmpeg not found. Please install ffmpeg.")
+        
+        # Construct ffmpeg command
+        command = [
+            'ffmpeg',
+            '-i', video_path,  # Input file
+            '-vn',  # No video
+            '-acodec', 'libmp3lame',  # MP3 codec
+            '-ac', '1',  # Mono audio
+            '-ar', '16000',  # 16kHz sampling rate
+            '-y',  # Overwrite output file
+            output_path
+        ]
+        
+        # Run ffmpeg command with proper encoding handling
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            startupinfo=None if os.name != 'nt' else subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW)
+        )
+        
+        # Read output using binary mode and decode manually
+        stdout_data, stderr_data = process.communicate()
+        
+        # Check if the process was successful
+        if process.returncode != 0:
+            # Safely decode error output
+            try:
+                error_message = stderr_data.decode('utf-8', errors='replace')
+            except:
+                error_message = str(stderr_data)
+            raise RuntimeError(f"Error extracting audio: {error_message}")
+        
+        return output_path
+        
+    except Exception as e:
+        print(f"Error during audio extraction: {str(e)}")
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        raise
+    
 def format_timestamp(seconds):
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
@@ -109,39 +256,90 @@ def extract_segments(transcript):
     return segments
 
 def translate_bulk(client, segments, target_language):
+    """Translate segments with enhanced natural language prompting"""
     text_to_translate = "\n\n".join([f"[SEG{s['number']}]\n{s['text']}" for s in segments])
     
-    messages=[
-        {"role": "system", "content": f"You are a translator. Translate the following text to {target_language}. Maintain the [SEG#] markers and structure. Each [SEG#] is part of the same video. Return only the translated text with [SEG#] markers."},
-        {"role": "user", "content": text_to_translate}
+    messages = [
+        {
+            "role": "system",
+            "content": f"""You are an expert translator specializing in {target_language}, with deep understanding of cultural context and natural speech patterns. Your task is to translate the following video transcript segments.
+
+Key translation principles to follow:
+- Prioritize natural, conversational language over literal translations
+- Maintain the original tone and style (casual, formal, humorous, etc.)
+- Adapt idioms and expressions to culturally appropriate equivalents in {target_language}
+- Ensure the translations sound fluid and native when spoken aloud
+- Consider the context that this is spoken dialogue, not written text
+- Preserve the emotional impact and intent of the original speech
+
+Format requirements:
+- Maintain the [SEG#] markers exactly as they appear
+- Keep line breaks and spacing consistent
+- Return only the translated text with segment markers, no explanations
+
+Example of natural translation:
+[SEG1] "Hey, what's up?" → [SEG1] "¿Qué tal?" (Spanish - casual greeting adapted to target culture)
+Instead of: "¿Oye, qué está arriba?" (literal translation)"""
+        },
+        {
+            "role": "user", 
+            "content": text_to_translate
+        }
     ]
+    
+    print(f"Requesting translation to {target_language}...")
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages
+        model="gpt-4",  # Use gpt-4o-mini to reduce api token costs, gpt-4 yields the best results at the highest cost
+        messages=messages,
+        temperature=0.7  # Slightly increased for more natural language
     )
     translated_text = response.choices[0].message.content.strip()
     
+    # Process and validate the translated segments
     translated_segments = re.split(r'\[SEG\d+\]\s*', translated_text)
     translated_segments = [seg.strip() for seg in translated_segments if seg.strip()]
     
+    # Validation check
+    if len(translated_segments) != len(segments):
+        print("Warning: Number of translated segments doesn't match original")
+        
     return translated_segments
 
 def process_transcript(transcript, target_language, api_key):
+    """Enhanced transcript processing with better error handling"""
     client = OpenAI(api_key=api_key)
     if not client.api_key:
         raise ValueError("Invalid OpenAI API key.")
 
+    # Extract segments first
     segments = extract_segments(transcript)
-    translated_segments = translate_bulk(client, segments, target_language)
+    
+    # Split into smaller batches if needed (to avoid token limits)
+    batch_size = 20  # Adjust based on typical segment length
+    translated_segments = []
+    
+    for i in range(0, len(segments), batch_size):
+        batch = segments[i:i + batch_size]
+        print(f"Translating batch {i//batch_size + 1}/{(len(segments)-1)//batch_size + 1}...")
+        
+        try:
+            batch_translations = translate_bulk(client, batch, target_language)
+            translated_segments.extend(batch_translations)
+        except Exception as e:
+            print(f"Error translating batch {i//batch_size + 1}: {str(e)}")
+            # Add placeholder for failed translations
+            translated_segments.extend(["[Translation error]"] * len(batch))
 
     print(f"Number of original segments: {len(segments)}")
     print(f"Number of translated segments: {len(translated_segments)}")
     
     if len(segments) != len(translated_segments):
-        print(f"ERROR: Original and translated segments don't match! Check the transcription for issues")
+        print("Warning: Translation mismatch. Some segments may be missing.")
 
+    # Generate the final SRT content
     translated_srt = ""
     translated_segments_with_timing = []
+    
     for i, original in enumerate(segments):
         translated_srt += f"{original['number']}\n"
         translated_srt += f"{original['start']} --> {original['end']}\n"
@@ -160,24 +358,62 @@ def process_transcript(transcript, target_language, api_key):
     return translated_srt, translated_segments_with_timing
 
 def save_translated_srt(translated_srt, target_language, output_dir, filename='transcript_translated.srt'):
+    """Save translated SRT with proper path handling"""
+    # Sanitize the base name to remove problematic characters
     base_name = os.path.splitext(filename)[0]
+    base_name = sanitize_filename(base_name)
+    
+    # Create new filename with sanitized base name
     new_filename = f"{base_name}_{target_language.lower()}.srt"
     full_path = os.path.join(output_dir, new_filename)
+    
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Write the file with UTF-8 encoding
     with open(full_path, 'w', encoding='utf-8') as file:
         file.write(translated_srt)
+    
     print(f"Translated subtitles saved to: {full_path}")
     return full_path
 
 def get_video_dimensions(video_path):
-    probe = ffmpeg.probe(video_path)
-    video_info = next(s for s in probe['streams'] if s['codec_type'] == 'video')
-    width = int(video_info['width'])
-    height = int(video_info['height'])
-    return width, height
+    """Get video dimensions using ffprobe with proper encoding handling"""
+    try:
+        command = [
+            'ffprobe',
+            '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=width,height',
+            '-of', 'json',
+            video_path
+        ]
+        
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            startupinfo=None if os.name != 'nt' else subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW)
+        )
+        
+        stdout_data, stderr_data = process.communicate()
+        
+        if process.returncode != 0:
+            raise RuntimeError(f"Error getting video dimensions: {stderr_data.decode('utf-8', errors='replace')}")
+        
+        video_info = json.loads(stdout_data.decode('utf-8'))
+        width = int(video_info['streams'][0]['width'])
+        height = int(video_info['streams'][0]['height'])
+        
+        return width, height
+        
+    except Exception as e:
+        print(f"Error getting video dimensions: {str(e)}")
+        raise
 
 def calculate_font_size(video_width):
     # Base font size for a 1920px wide video
-    base_font_size = 24
+    base_font_size = 16
     base_width = 1920
     
     # Calculate the scaling factor
@@ -189,42 +425,85 @@ def calculate_font_size(video_width):
     return font_size
 
 def add_subtitles_with_ffmpeg(video_path, srt_path, output_path, font='NanumGothic'):
+    """Add subtitles to video using ffmpeg with proper path handling"""
     print(f"Adding subtitles to video...")
     print(f"Video path: {video_path}")
     print(f"SRT path: {srt_path}")
     print(f"Output path: {output_path}")
 
     try:
-        # Get video dimensions
+        # Get video dimensions using ffprobe
         width, height = get_video_dimensions(video_path)
-        
-        # Calculate dynamic font size
         font_size = calculate_font_size(width)
         
         print(f"Video dimensions: {width}x{height}")
         print(f"Calculated font size: {font_size}")
+        
+        # Normalize paths and escape special characters
+        video_path = os.path.normpath(video_path)
+        srt_path = os.path.normpath(srt_path)
+        output_path = os.path.normpath(output_path)
+        
+        # On Windows, convert backslashes to forward slashes for ffmpeg
+        if os.name == 'nt':
+            video_path = video_path.replace('\\', '/')
+            srt_path = srt_path.replace('\\', '/')
+            output_path = output_path.replace('\\', '/')
 
-        # Input video
-        input_video = ffmpeg.input(video_path)
-
-        # Add subtitles with dynamic font size
-        video_with_subtitles = input_video.video.filter('subtitles', srt_path, 
-            force_style=f'Fontname={font},FontSize={font_size},PrimaryColour=&HFFFFFF,OutlineColour=&H40000000,BorderStyle=3,Outline=1,Shadow=0,MarginV=35')
-
-        # Add original audio
-        audio = input_video.audio
-
-        # Output
-        output = ffmpeg.output(video_with_subtitles, audio, output_path, acodec='copy')
-
-        # Run FFmpeg
-        ffmpeg.run(output, overwrite_output=True)
-
+        # Escape special characters in paths
+        srt_path = srt_path.replace("'", "'\\''")
+        
+        # Construct subtitle filter with escaped paths
+        subtitle_filter = f"subtitles='{srt_path}'"
+        style = f":force_style='Fontname={font},FontSize={font_size},PrimaryColour=&HFFFFFF,OutlineColour=&H40000000,BorderStyle=3,Outline=1,Shadow=0,MarginV=35'"
+        
+        # Construct complete ffmpeg command
+        command = [
+            'ffmpeg',
+            '-i', video_path,
+            '-vf', subtitle_filter + style,
+            '-c:a', 'copy',
+            '-y',
+            output_path
+        ]
+        
+        print("Executing command:", ' '.join(command))  # Debug print
+        
+        # Create startupinfo to hide console window on Windows
+        startupinfo = None
+        if os.name == 'nt':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        
+        # Run ffmpeg command
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            startupinfo=startupinfo
+        )
+        
+        # Read output using binary mode and decode manually
+        stdout_data, stderr_data = process.communicate()
+        
+        # Check if the process was successful
+        if process.returncode != 0:
+            error_message = stderr_data.decode('utf-8', errors='replace')
+            if "No such file or directory" in error_message:
+                print(f"Debug - Checking file existence:")
+                print(f"Video exists: {os.path.exists(video_path)}")
+                print(f"SRT exists: {os.path.exists(srt_path)}")
+                print(f"Output directory exists: {os.path.exists(os.path.dirname(output_path))}")
+            raise RuntimeError(f"Error adding subtitles: {error_message}")
+            
         print(f"Video with translated subtitles saved to: {output_path}")
-    except ffmpeg.Error as e:
-        print("FFmpeg Error:")
-        print(e.stderr.decode())
+        
+    except Exception as e:
+        print(f"Error adding subtitles: {str(e)}")
+        if os.path.exists(output_path):
+            os.remove(output_path)
         raise
+
 
 def main():
     parser = argparse.ArgumentParser(description="Video Subtitle Translator")
@@ -262,8 +541,10 @@ def main():
     # Transcribe audio from video
     print("Transcribing audio...")
     if args.use_local_whisper:
+        print("Using local whisper model")
         transcript = transcribe_audio(video_path, args.models_path)
     else:
+        print("Using OpenAI API whisper model")
         transcript = transcribe_audio_chatgpt(client, video_path)
     print(f"Audio transcribed!\n")
     print(transcript)
