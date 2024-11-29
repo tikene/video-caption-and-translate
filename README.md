@@ -157,7 +157,7 @@ The script generates the following files in the output directory:
 3. Video with embedded translated subtitles
 
 ## ⚠️ Important Notes
-- The script uses the GPT-4 model for translation by default, which costs around $0.1 cents for a two-minute video. You may reduce token costs by switching to 'gpt-4o-mini' which is ~80% cheaper at the expense of translation quality
+- The script uses the GPT-4o-mini model for translation by default, which costs around $0.03 cents for a two-minute video. To increase translation quality, you may use gpt-4, but beware that costs will go up substantially
 - Longer video -> Higher costs (duh)
 
 ## 📄 License
