@@ -12,6 +12,12 @@ import tempfile
 import shutil 
 import subprocess
 import json
+from decimal import Decimal, ROUND_HALF_UP
+import numpy as np
+from typing import List, Dict
+import time
+from tqdm import tqdm
+
 
 def sanitize_filename(filename):
     # Remove non-ASCII characters
@@ -56,53 +62,146 @@ def download_video(url, output_path):
     
     return filename
 
-def split_audio(audio_path, max_size_mb=25):
-    """Split audio file into chunks smaller than max_size_mb"""
-    max_size_bytes = max_size_mb * 1024 * 1024
-    print(f"Loading audio file: {audio_path}")
+
+def find_nearest_silence(audio: AudioSegment, position_ms: int, window_ms: int = 1000) -> int:
+    """Find the nearest silence point to align chunk boundaries"""
+    start = max(0, position_ms - window_ms)
+    end = min(len(audio), position_ms + window_ms)
     
+    # Extract the audio segment around the target position
+    chunk = audio[start:end]
+    
+    # Calculate RMS values in small windows
+    window_size = 50  # 50ms windows
+    rms_values = []
+    for i in range(0, len(chunk), window_size):
+        window = chunk[i:i + window_size]
+        rms_values.append(window.rms)
+    
+    # Find the quietest point
+    if not rms_values:
+        return position_ms
+        
+    min_rms_index = np.argmin(rms_values)
+    silence_position = start + (min_rms_index * window_size)
+    
+    return silence_position
+
+
+def process_chunk_segments(chunk_info: Dict, segments: List, video_duration: float) -> List:
+    """Process segments from a chunk with precise timing"""
+    from decimal import Decimal, ROUND_HALF_UP
+    
+    processed_segments = []
+    base_time = Decimal(str(chunk_info['start_time']))
+    has_previous = chunk_info['has_previous']
+    has_next = chunk_info['has_next']
+    overlap_start = Decimal(str(chunk_info['overlap_start']))
+    overlap_end = Decimal(str(chunk_info['overlap_end']))
+    
+    for segment in segments:
+        # Convert timestamps to Decimal for precise arithmetic
+        start = Decimal(str(segment.start))
+        end = Decimal(str(segment.end))
+        
+        # Adjust timestamps for chunk position
+        actual_start = (start - (overlap_start - base_time)).quantize(Decimal('0.001'), rounding=ROUND_HALF_UP)
+        actual_end = (end - (overlap_start - base_time)).quantize(Decimal('0.001'), rounding=ROUND_HALF_UP)
+        
+        # Skip segments in overlap regions except for chunk boundaries
+        if has_previous and actual_start < base_time:
+            continue
+        if has_next and actual_end > Decimal(str(chunk_info['end_time'])):
+            continue
+            
+        # Validate against video duration
+        final_start = min(float(actual_start), video_duration)
+        final_end = min(float(actual_end), video_duration)
+        
+        if final_start < final_end:
+            segment.start = final_start
+            segment.end = final_end
+            processed_segments.append(segment)
+    
+    return processed_segments
+
+
+def split_audio(audio_path: str, video_duration: float, max_size_mb: int = 25) -> tuple:
+    """Split audio with improved chunk handling and overlap"""
     try:
         audio = AudioSegment.from_mp3(audio_path)
         duration_ms = len(audio)
         
-        # Calculate chunk size based on original file size and duration
-        file_size = os.path.getsize(audio_path)
-        ms_per_mb = duration_ms / (file_size / 1024 / 1024)
-        chunk_duration_ms = int(ms_per_mb * (max_size_mb * 0.95))  # 5% safety margin
+        # Validate and adjust audio duration
+        if abs(duration_ms/1000.0 - video_duration) > 1.0:
+            print(f"Warning: Audio duration mismatch. Audio: {duration_ms/1000.0:.2f}s, Video: {video_duration:.2f}s")
+            # Adjust audio duration if needed
+            if duration_ms/1000.0 > video_duration:
+                audio = audio[:int(video_duration * 1000)]
+                duration_ms = len(audio)
         
+        # Normalize audio
+        audio = audio.normalize(headroom=0.1)
+        
+        # Calculate optimal chunk duration
+        sample_width = audio.sample_width
+        frame_rate = audio.frame_rate
+        channels = audio.channels
+        
+        bytes_per_second = sample_width * frame_rate * channels
+        optimal_chunk_duration_ms = int((max_size_mb * 1024 * 1024 * 0.90) / (bytes_per_second / 1000))
+        
+        # Add overlap between chunks
+        overlap_duration = 2000  # 2 seconds overlap
         chunks = []
         temp_dir = tempfile.mkdtemp()
-        print(f"Created temporary directory: {temp_dir}")
         
-        # Split audio into chunks
-        for i, start in enumerate(range(0, duration_ms, chunk_duration_ms)):
-            end = min(start + chunk_duration_ms, duration_ms)
-            chunk = audio[start:end]
+        current_position = 0
+        chunk_number = 0
+        
+        while current_position < duration_ms:
+            # Find optimal chunk boundary near silence
+            target_end = min(current_position + optimal_chunk_duration_ms, duration_ms)
+            end_position = find_nearest_silence(audio, target_end)
             
-            # Export chunk with optimal settings
-            chunk_path = os.path.join(temp_dir, f'chunk_{i}.mp3')
-            print(f"Exporting chunk {i+1} to: {chunk_path}")
+            # Ensure minimum chunk size
+            if end_position - current_position < 1000:  # Minimum 1 second
+                end_position = min(current_position + 1000, duration_ms)
+            
+            # Extract chunk with overlap
+            chunk_start = max(0, current_position - overlap_duration)
+            chunk_end = min(duration_ms, end_position + overlap_duration)
+            chunk = audio[chunk_start:chunk_end]
+            
+            # Export chunk with quality settings
+            chunk_path = os.path.join(temp_dir, f'chunk_{chunk_number}.mp3')
+            print(f"Exporting chunk {chunk_number + 1} ({chunk_start/1000.0:.2f}s - {chunk_end/1000.0:.2f}s)")
             
             chunk.export(
                 chunk_path,
                 format="mp3",
                 parameters=[
-                    "-ac", "1",  # Mono audio
-                    "-ar", "16000",  # 16kHz sample rate
-                    "-q:a", "9"  # Lowest quality (highest compression)
+                    "-ac", "1",
+                    "-ar", "16000",
+                    "-b:a", "64k",
+                    "-write_xing", "0",
+                    "-q:a", "9"
                 ]
             )
             
-            # Verify chunk size
-            chunk_size = os.path.getsize(chunk_path)
-            if chunk_size > max_size_bytes:
-                raise ValueError(
-                    f"Chunk {i} size ({chunk_size/1024/1024:.2f}MB) exceeds limit "
-                    f"({max_size_mb}MB) after compression"
-                )
+            chunks.append({
+                'path': chunk_path,
+                'start_time': current_position / 1000.0,
+                'end_time': end_position / 1000.0,
+                'duration': (end_position - current_position) / 1000.0,
+                'overlap_start': chunk_start / 1000.0,
+                'overlap_end': chunk_end / 1000.0,
+                'has_previous': current_position > 0,
+                'has_next': end_position < duration_ms
+            })
             
-            chunks.append(chunk_path)
-            print(f"Chunk {i+1} size: {chunk_size/1024/1024:.2f}MB")
+            current_position = end_position
+            chunk_number += 1
         
         return chunks, temp_dir
         
@@ -113,36 +212,37 @@ def split_audio(audio_path, max_size_mb=25):
         raise
 
 
-def transcribe_audio_chatgpt(client, audio_path):
-    """Modified transcription function to handle large files"""
-    # First extract audio in optimal format
+def transcribe_audio_chatgpt(client: OpenAI, audio_path: str, video_duration: float) -> str:
+    """Transcription function with improved timing accuracy and chunk handling"""
     audio_mp3_path = extract_audio(audio_path)
     temp_dir = None
+    
     try:
-        # Check if file is larger than 24MB
+        all_segments = []
+        
+        # Process large files in chunks
         if os.path.getsize(audio_mp3_path) > 1024 * 1024 * 24:
             print("Audio file larger than 25MB, splitting into chunks...")
-            chunks, temp_dir = split_audio(audio_mp3_path)
+            chunks, temp_dir = split_audio(audio_mp3_path, video_duration)
             
-            # Process each chunk
-            all_segments = []
-            for i, chunk_path in enumerate(chunks):
-                print(f"Processing chunk {i+1}/{len(chunks)}...")
-                with open(chunk_path, "rb") as audio_file:
+            for chunk in chunks:
+                print(f"Processing chunk {chunks.index(chunk) + 1}/{len(chunks)}...")
+                
+                with open(chunk['path'], "rb") as audio_file:
                     response = client.audio.transcriptions.create(
                         model="whisper-1",
                         file=audio_file,
                         response_format="verbose_json"
                     )
                     
-                    # Adjust timestamps for chunks after the first
-                    time_offset = i * (25 * 60)  # Approximate offset based on chunk duration
-                    for segment in response.segments:
-                        segment.start += time_offset
-                        segment.end += time_offset
-                        all_segments.append(segment)
+                    # Process segments with precise timing
+                    processed_segments = process_chunk_segments(chunk, response.segments, video_duration)
+                    all_segments.extend(processed_segments)
+                    
+                # Brief pause between chunks
+                time.sleep(0.5)
         else:
-            # Process single file if under 25MB
+            # Process single file
             with open(audio_mp3_path, "rb") as audio_file:
                 response = client.audio.transcriptions.create(
                     model="whisper-1",
@@ -150,23 +250,68 @@ def transcribe_audio_chatgpt(client, audio_path):
                     response_format="verbose_json"
                 )
                 all_segments = response.segments
+                
+                # Validate timestamps
+                for segment in all_segments:
+                    segment.start = min(float(segment.start), video_duration)
+                    segment.end = min(float(segment.end), video_duration)
         
-        # Generate transcript with adjusted timestamps
+        # Sort and validate segments
+        all_segments.sort(key=lambda x: x.start)
+        validate_segments_continuity(all_segments)
+        
+        # Generate final transcript
         transcript = ""
         for i, segment in enumerate(all_segments, start=1):
             start_time = format_timestamp(segment.start)
             end_time = format_timestamp(segment.end)
             transcript += f"{i}\n{start_time} --> {end_time}\n{segment.text.strip()}\n\n"
         
+        print(f"Total segments: {len(all_segments)}")
+        if all_segments:
+            print(f"First segment starts at: {format_timestamp(all_segments[0].start)}")
+            print(f"Last segment ends at: {format_timestamp(all_segments[-1].end)}")
+            print(f"Total duration: {all_segments[-1].end - all_segments[0].start:.2f} seconds")
+        
         return transcript
-            
+        
     finally:
-        # Clean up temporary files
         if os.path.exists(audio_mp3_path):
             os.remove(audio_mp3_path)
         if temp_dir and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
-            
+
+def validate_segments_continuity(segments: List) -> None:
+    """Ensure continuous timing between segments with improved validation"""
+    if not segments:
+        return
+        
+    from decimal import Decimal, ROUND_HALF_UP
+    
+    for i in range(len(segments) - 1):
+        current = segments[i]
+        next_seg = segments[i + 1]
+        
+        # Convert to Decimal for precise comparison
+        curr_end = Decimal(str(current.end))
+        next_start = Decimal(str(next_seg.start))
+        
+        # Fix gaps (allow 300ms gap)
+        if next_start - curr_end > Decimal('0.3'):
+            print(f"Found gap between segments {i} and {i+1}, adjusting...")
+            middle = (curr_end + next_start) / 2
+            middle = middle.quantize(Decimal('0.001'), rounding=ROUND_HALF_UP)
+            current.end = float(middle)
+            next_seg.start = float(middle)
+        
+        # Fix overlaps
+        elif curr_end > next_start:
+            print(f"Found overlap between segments {i} and {i+1}, adjusting...")
+            middle = (curr_end + next_start) / 2
+            middle = middle.quantize(Decimal('0.001'), rounding=ROUND_HALF_UP)
+            current.end = float(middle)
+            next_seg.start = float(middle)
+
 def transcribe_audio(audio_path, cache_path, model_size="large-v3"):
     model = WhisperModel(model_size, device="cpu", compute_type="int8", download_root=cache_path)
     
@@ -188,20 +333,22 @@ def extract_audio(video_path, output_path=None):
     if output_path is None:
         output_path = os.path.splitext(video_path)[0] + '.mp3'
     
+    # Check if ffmpeg is installed
+    if not shutil.which('ffmpeg'):
+        raise RuntimeError("ffmpeg not found. Please install ffmpeg.")
+
     try:
-        # Check if ffmpeg is installed
-        if not shutil.which('ffmpeg'):
-            raise RuntimeError("ffmpeg not found. Please install ffmpeg.")
-        
-        # Construct ffmpeg command
         command = [
             'ffmpeg',
-            '-i', video_path,  # Input file
-            '-vn',  # No video
-            '-acodec', 'libmp3lame',  # MP3 codec
-            '-ac', '1',  # Mono audio
-            '-ar', '16000',  # 16kHz sampling rate
-            '-y',  # Overwrite output file
+            '-i', video_path,
+            '-vn',
+            '-acodec', 'libmp3lame',
+            '-ac', '1',
+            '-ar', '16000',
+            '-b:a', '64k',        # Control bitrate
+            '-filter:a', 'dynaudnorm=f=150:g=15',  # Normalize audio
+            '-write_xing', '0',
+            '-y',
             output_path
         ]
         
@@ -233,11 +380,23 @@ def extract_audio(video_path, output_path=None):
             os.remove(output_path)
         raise
     
-def format_timestamp(seconds):
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    seconds = seconds % 60
-    return f"{hours:02d}:{minutes:02d}:{seconds:06.3f}".replace(".", ",")
+def format_timestamp(seconds: float, precision: int = 3) -> str:
+    """Format timestamp with controlled precision and decimal arithmetic"""
+    # Convert to Decimal for precise arithmetic
+    seconds_dec = Decimal(str(seconds)).quantize(
+        Decimal('0.001'), 
+        rounding=ROUND_HALF_UP
+    )
+    
+    hours = int(seconds_dec // Decimal('3600'))
+    minutes = int((seconds_dec % Decimal('3600')) // Decimal('60'))
+    remaining_seconds = seconds_dec % Decimal('60')
+    
+    # Format with exact precision
+    decimal_format = f"{{:0{precision + 3}.{precision}f}}"
+    formatted_seconds = decimal_format.format(float(remaining_seconds))
+    
+    return f"{hours:02d}:{minutes:02d}:{formatted_seconds}".replace(".", ",")
 
 def extract_segments(transcript):
     pattern = r'(\d+)\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\n((?:(?!\d+\n\d{2}:\d{2}:\d{2},\d{3}).)+)'
@@ -255,9 +414,72 @@ def extract_segments(transcript):
     
     return segments
 
+def merge_short_segments(segments: List, min_words: int = 5) -> List:
+    """Merge segments that are too short with adjacent segments.
+    
+    Args:
+        segments: List of segment dictionaries
+        min_words: Minimum number of words a segment should have
+    """
+    merged = []
+    i = 0
+    
+    while i < len(segments):
+        current = segments[i]
+        word_count = len(current['text'].split())
+        
+        # If this is a short segment
+        if word_count < min_words:
+            # Try to merge with the previous segment first
+            if merged and i > 0:
+                prev = merged[-1]
+                # Merge with previous segment
+                merged[-1] = {
+                    'number': prev['number'],
+                    'start': prev['start'],
+                    'end': current['end'],
+                    'text': prev['text'] + ' ' + current['text']
+                }
+            # If we can't merge with previous, try to merge with next
+            elif i + 1 < len(segments):
+                next_seg = segments[i + 1]
+                merged.append({
+                    'number': current['number'],
+                    'start': current['start'],
+                    'end': next_seg['end'],
+                    'text': current['text'] + ' ' + next_seg['text']
+                })
+                i += 1  # Skip the next segment since we merged it
+            else:
+                # If we can't merge with anything, keep it as is
+                merged.append(current)
+        else:
+            merged.append(current)
+        
+        i += 1
+    
+    # Renumber segments sequentially
+    for idx, segment in enumerate(merged, start=1):
+        segment['number'] = idx
+    
+    return merged
+
+
 def translate_bulk(client, segments, target_language):
-    """Translate segments with enhanced natural language prompting"""
-    text_to_translate = "\n\n".join([f"[SEG{s['number']}]\n{s['text']}" for s in segments])
+    """Translate segments with enhanced logging, debugging, and partial success handling"""
+    
+    # Format segments with clear boundaries and validation markers
+    text_to_translate = ""
+    for seg in segments:
+        # Add boundary markers to help with parsing
+        text_to_translate += f"[START_SEG{seg['number']}]\n{seg['text']}\n[END_SEG{seg['number']}]\n\n"
+    
+    # Log the exact input being sent to the API
+    print(f"\nDEBUG: Translation Input:")
+    print(f"Number of segments to translate: {len(segments)}")
+    print(f"First segment number: {segments[0]['number']}")
+    print(f"Last segment number: {segments[-1]['number']}")
+    print(f"Sample of text being sent:\n{text_to_translate[:500]}...")
     
     messages = [
         {
@@ -273,13 +495,20 @@ Key translation principles to follow:
 - Preserve the emotional impact and intent of the original speech
 
 Format requirements:
-- Maintain the [SEG#] markers exactly as they appear
-- Keep line breaks and spacing consistent
-- Return only the translated text with segment markers, no explanations
+- Keep all [START_SEG#] and [END_SEG#] markers exactly as they appear
+- Maintain exact segment numbering
+- Place your translation between the START and END markers
+- Do not add any additional text or explanations
+- Keep one empty line between segments
 
-Example of natural translation:
-[SEG1] "Hey, what's up?" → [SEG1] "¿Qué tal?" (Spanish - casual greeting adapted to target culture)
-Instead of: "¿Oye, qué está arriba?" (literal translation)"""
+Example format:
+[START_SEG1]
+¿Qué tal?
+[END_SEG1]
+
+[START_SEG2]
+¿Cómo estás?
+[END_SEG2]"""
         },
         {
             "role": "user", 
@@ -287,74 +516,297 @@ Instead of: "¿Oye, qué está arriba?" (literal translation)"""
         }
     ]
     
-    print(f"Requesting translation to {target_language}...")
-    response = client.chat.completions.create(
-        model="gpt-4",  # Use gpt-4o-mini to reduce api token costs, gpt-4 yields the best results at the highest cost
-        messages=messages,
-        temperature=0.7  # Slightly increased for more natural language
-    )
-    translated_text = response.choices[0].message.content.strip()
+    successful_translations = {}  # Track successful translations
+    max_retries = 3
+    retry_delay = 2
     
-    # Process and validate the translated segments
-    translated_segments = re.split(r'\[SEG\d+\]\s*', translated_text)
-    translated_segments = [seg.strip() for seg in translated_segments if seg.strip()]
+    for attempt in range(max_retries):
+        try:
+            print(f"\nDEBUG: Attempt {attempt + 1}/{max_retries}")
+            print(f"Input token count: {len(text_to_translate.split())}")
+            
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=0.4,
+            )
+            
+            translated_text = response.choices[0].message.content.strip()
+            
+            # Log API response characteristics
+            print(f"\nDEBUG: Translation Response:")
+            print(f"Response length: {len(translated_text)}")
+            print(f"Sample of response:\n{translated_text[:500]}...")
+            
+            # Parse segments with robust error handling
+            current_translations = parse_translated_segments(translated_text, len(segments))
+            
+            # Log parsing results
+            print(f"\nDEBUG: Parsed Segments:")
+            print(f"Number of parsed segments: {len(current_translations)}")
+            print(f"Segment numbers found: {sorted(current_translations.keys())}")
+            
+            # Add successful translations to our collection
+            for seg_num, translation in current_translations.items():
+                if translation and translation.strip():
+                    successful_translations[int(seg_num)] = translation
+            
+            # Check for missing segments
+            original_numbers = {seg['number'] for seg in segments}
+            translated_numbers = set(successful_translations.keys())
+            missing = original_numbers - translated_numbers
+            
+            if missing:
+                print(f"\nDEBUG: Missing segments analysis:")
+                print(f"Missing segment numbers: {missing}")
+                
+                # If this isn't the last attempt, prepare for retry with just missing segments
+                if attempt < max_retries - 1:
+                    # Create new text_to_translate with only missing segments
+                    retry_segments = [seg for seg in segments if seg['number'] in missing]
+                    text_to_translate = ""
+                    for seg in retry_segments:
+                        text_to_translate += f"[START_SEG{seg['number']}]\n{seg['text']}\n[END_SEG{seg['number']}]\n\n"
+                    
+                    print(f"\nRetrying {len(missing)} segments in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+            
+            # If we have all segments or this is our last attempt, return what we have
+            if not missing or attempt == max_retries - 1:
+                return successful_translations
+                
+        except Exception as e:
+            print(f"\nDEBUG: Exception during translation:")
+            print(f"Exception type: {type(e).__name__}")
+            print(f"Exception message: {str(e)}")
+            if hasattr(e, '__traceback__'):
+                import traceback
+                print(f"Traceback:\n{''.join(traceback.format_tb(e.__traceback__))}")
+            
+            if attempt < max_retries - 1:
+                # For exceptions, retry with all untranslated segments
+                missing = {seg['number'] for seg in segments} - set(successful_translations.keys())
+                if missing:
+                    retry_segments = [seg for seg in segments if seg['number'] in missing]
+                    text_to_translate = ""
+                    for seg in retry_segments:
+                        text_to_translate += f"[START_SEG{seg['number']}]\n{seg['text']}\n[END_SEG{seg['number']}]\n\n"
+                
+                print(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                # On final attempt, return what we have
+                return successful_translations
     
-    # Validation check
-    if len(translated_segments) != len(segments):
-        print("Warning: Number of translated segments doesn't match original")
-        
-    return translated_segments
+    raise RuntimeError("Failed to obtain valid translation after all retries")
+
+
+
+def validate_translation_response(translated_segments, original_segments):
+    """Validate the translation response for completeness and integrity"""
+    
+    # Check for missing segments
+    original_numbers = {seg['number'] for seg in original_segments}
+    translated_numbers = set(translated_segments.keys())
+    missing_segments = original_numbers - translated_numbers
+    
+    if missing_segments:
+        print(f"Warning: Missing segments: {missing_segments}")
+        return False
+    
+    # Check for empty or invalid translations
+    for seg_num, content in translated_segments.items():
+        if not content or len(content.strip()) == 0:
+            print(f"Warning: Empty translation for segment {seg_num}")
+            return False
+    
+    # Validate segment order
+    if list(translated_segments.keys()) != sorted(translated_segments.keys()):
+        print("Warning: Segments are not in sequential order")
+        return False
+    
+    return True
+
+def parse_translated_segments(translated_text, expected_count):
+    """Parse translated segments with enhanced logging"""
+    segments = {}
+    
+    print(f"\nDEBUG: Parsing Translation Response")
+    print(f"Expected segment count: {expected_count}")
+    
+    # Split into chunks by START_SEG markers
+    chunks = re.split(r'\[START_SEG(\d+)\]', translated_text)
+    chunks = chunks[1:]  # Remove initial empty chunk
+    
+    print(f"Number of chunks found: {len(chunks)}")
+    
+    if len(chunks) == 0:
+        print("ERROR: No valid segments found in translation")
+        return segments
+    
+    # Process chunks in pairs
+    for i in range(0, len(chunks), 2):
+        if i + 1 >= len(chunks):
+            print(f"WARNING: Odd number of chunks, skipping last chunk")
+            break
+            
+        try:
+            segment_num = int(chunks[i])
+            content = chunks[i + 1]
+            
+            print(f"\nProcessing segment {segment_num}:")
+            print(f"Content length: {len(content)}")
+            
+            # Extract content between START and END markers
+            match = re.search(r'(.*?)\[END_SEG\d+\]', content, re.DOTALL)
+            if match:
+                segment_text = match.group(1).strip()
+                if segment_text:
+                    segments[segment_num] = segment_text
+                    print(f"Successfully parsed segment {segment_num}")
+                else:
+                    print(f"WARNING: Empty content for segment {segment_num}")
+            else:
+                print(f"WARNING: Could not find END_SEG marker for segment {segment_num}")
+                print(f"Content sample: {content[:100]}...")
+            
+        except (ValueError, AttributeError) as e:
+            print(f"ERROR parsing segment {i//2 + 1}: {str(e)}")
+            print(f"Chunk content: {chunks[i][:100]}...")
+            continue
+    
+    print(f"\nTotal segments parsed: {len(segments)}")
+    return segments
 
 def process_transcript(transcript, target_language, api_key):
-    """Enhanced transcript processing with better error handling"""
     client = OpenAI(api_key=api_key)
     if not client.api_key:
         raise ValueError("Invalid OpenAI API key.")
 
-    # Extract segments first
+    # Extract and merge segments as before
     segments = extract_segments(transcript)
+    if not segments:
+        raise ValueError("No segments found in transcript")
     
-    # Split into smaller batches if needed (to avoid token limits)
-    batch_size = 20  # Adjust based on typical segment length
-    translated_segments = []
+    print("Merging short segments...")
+    original_count = len(segments)
+    segments = merge_short_segments(segments)
+    print(f"Merged {original_count - len(segments)} segments")
     
-    for i in range(0, len(segments), batch_size):
-        batch = segments[i:i + batch_size]
-        print(f"Translating batch {i//batch_size + 1}/{(len(segments)-1)//batch_size + 1}...")
-        
+    # Translation state tracking
+    successful_translations = {}  # Store successful translations by segment number
+    remaining_segments = segments.copy()  # Track segments still needing translation
+    retry_count = {}  # Track retry attempts per segment
+    
+    def calculate_batch_size(segments_to_process, max_tokens=3000):
+        """Calculate optimal batch size based on text length"""
+        avg_tokens_per_segment = max(
+            len(s['text'].split()) * 1.5  # Conservative token estimate
+            for s in segments_to_process
+        )
+        return max(1, min(10, int(max_tokens / avg_tokens_per_segment)))
+    
+    def process_batch(batch, attempt=1):
+        """Process a batch with detailed logging"""
+        print(f"\nProcessing batch of {len(batch)} segments (Attempt {attempt})")
         try:
-            batch_translations = translate_bulk(client, batch, target_language)
-            translated_segments.extend(batch_translations)
+            translations = translate_bulk(client, batch, target_language)
+            return translations
         except Exception as e:
-            print(f"Error translating batch {i//batch_size + 1}: {str(e)}")
-            # Add placeholder for failed translations
-            translated_segments.extend(["[Translation error]"] * len(batch))
-
-    print(f"Number of original segments: {len(segments)}")
-    print(f"Number of translated segments: {len(translated_segments)}")
+            print(f"Batch processing error: {str(e)}")
+            return None
     
-    if len(segments) != len(translated_segments):
-        print("Warning: Translation mismatch. Some segments may be missing.")
-
-    # Generate the final SRT content
+    def handle_failed_segments(failed_segments, max_retries=3):
+        """Handle failed segments with progressively smaller batches"""
+        if not failed_segments:
+            return {}
+            
+        print(f"\nRetrying {len(failed_segments)} failed segments...")
+        retry_translations = {}
+        
+        # Sort failed segments by retry count
+        segments_by_retries = {}
+        for seg in failed_segments:
+            retry_count.setdefault(seg['number'], 0)
+            retry_count[seg['number']] += 1
+            if retry_count[seg['number']] <= max_retries:
+                segments_by_retries.setdefault(retry_count[seg['number']], []).append(seg)
+        
+        # Process each retry group
+        for retry_num, retry_segments in segments_by_retries.items():
+            # Use smaller batch size for retries
+            batch_size = max(1, calculate_batch_size(retry_segments) // 2)
+            print(f"\nRetry #{retry_num} with batch size {batch_size}")
+            
+            # Process in smaller batches
+            for i in range(0, len(retry_segments), batch_size):
+                batch = retry_segments[i:i + batch_size]
+                translations = process_batch(batch, attempt=retry_num)
+                
+                if translations:
+                    for seg_num, translation in translations.items():
+                        retry_translations[seg_num] = translation
+        
+        return retry_translations
+    
+    # Initial processing
+    batch_size = calculate_batch_size(segments)
+    print(f"\nInitial processing with batch size: {batch_size}")
+    
+    while remaining_segments:
+        current_batch = remaining_segments[:batch_size]
+        remaining_segments = remaining_segments[batch_size:]
+        
+        # Process current batch
+        translations = process_batch(current_batch)
+        if translations:
+            successful_translations.update(translations)
+            
+            # Identify failed segments in this batch
+            failed_segments = [
+                seg for seg in current_batch
+                if seg['number'] not in translations
+            ]
+            
+            # Handle failures if any
+            if failed_segments:
+                retry_translations = handle_failed_segments(failed_segments)
+                successful_translations.update(retry_translations)
+                
+                # Add any segments that still failed to remaining_segments
+                still_failed = [
+                    seg for seg in failed_segments
+                    if seg['number'] not in retry_translations
+                ]
+                remaining_segments.extend(still_failed)
+    
+    # Generate final SRT content
     translated_srt = ""
     translated_segments_with_timing = []
     
-    for i, original in enumerate(segments):
-        translated_srt += f"{original['number']}\n"
-        translated_srt += f"{original['start']} --> {original['end']}\n"
-        if i < len(translated_segments):
-            translated_text = translated_segments[i].strip()
-            translated_srt += f"{translated_text}\n\n"
+    for segment in segments:
+        translation = successful_translations.get(segment['number'])
+        if translation and translation != "[Translation error]":
+            translated_srt += f"{segment['number']}\n"
+            translated_srt += f"{segment['start']} --> {segment['end']}\n"
+            translated_srt += f"{translation}\n\n"
+            
             translated_segments_with_timing.append({
-                'number': original['number'],
-                'start': original['start'],
-                'end': original['end'],
-                'text': translated_text
+                'number': segment['number'],
+                'start': segment['start'],
+                'end': segment['end'],
+                'text': translation
             })
-        else:
-            translated_srt += "Translation not available\n\n"
-
+    
+    # Report final status
+    print(f"\nTranslation Summary:")
+    print(f"Total segments: {len(segments)}")
+    print(f"Successfully translated: {len(translated_segments_with_timing)}")
+    print(f"Failed segments: {len(segments) - len(translated_segments_with_timing)}")
+    
     return translated_srt, translated_segments_with_timing
 
 def save_translated_srt(translated_srt, target_language, output_dir, filename='transcript_translated.srt'):
@@ -424,84 +876,192 @@ def calculate_font_size(video_width):
     
     return font_size
 
-def add_subtitles_with_ffmpeg(video_path, srt_path, output_path, font='NanumGothic'):
-    """Add subtitles to video using ffmpeg with proper path handling"""
-    print(f"Adding subtitles to video...")
-    print(f"Video path: {video_path}")
-    print(f"SRT path: {srt_path}")
-    print(f"Output path: {output_path}")
-
+def get_video_duration_seconds(video_path):
+    """Get duration of video in seconds using ffprobe"""
     try:
-        # Get video dimensions using ffprobe
+        command = [
+            'ffprobe',
+            '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'json',
+            video_path
+        ]
+        
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            startupinfo=None if os.name == 'nt' else None
+        )
+        
+        stdout_data, _ = process.communicate()
+        duration_info = json.loads(stdout_data)
+        return float(duration_info['format']['duration'])
+    except Exception as e:
+        print(f"Error getting video duration: {str(e)}")
+        raise
+
+def check_ffmpeg_availability():
+    """Check if ffmpeg is available in the system path"""
+    try:
+        subprocess.run(['ffmpeg', '-version'], 
+                      stdout=subprocess.PIPE, 
+                      stderr=subprocess.PIPE,
+                      check=True)
+        return True
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return False
+
+def calculate_total_frames(video_path):
+    """Calculate total frames in video using ffprobe"""
+    try:
+        command = [
+            'ffprobe',
+            '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=r_frame_rate,nb_frames',
+            '-of', 'json',
+            video_path
+        ]
+        
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        
+        stdout_data, _ = process.communicate()
+        stream_info = json.loads(stdout_data)
+        
+        # Try to get nb_frames first
+        if 'streams' in stream_info and stream_info['streams']:
+            nb_frames = stream_info['streams'][0].get('nb_frames')
+            if nb_frames and nb_frames != 'N/A':
+                return int(nb_frames)
+        
+            # If nb_frames not available, calculate from duration and frame rate
+            r_frame_rate = stream_info['streams'][0].get('r_frame_rate', '')
+            if r_frame_rate:
+                # Parse frame rate fraction (e.g., "30/1")
+                num, den = map(int, r_frame_rate.split('/'))
+                fps = num / den
+                
+                # Get duration and calculate total frames
+                duration = get_video_duration(video_path)
+                return int(duration * fps)
+                
+    except Exception as e:
+        print(f"Warning: Could not calculate exact frame count: {str(e)}")
+        # Provide an estimate based on duration assuming 30fps
+        duration = get_video_duration(video_path)
+        return int(duration * 30)
+    
+def add_subtitles_with_ffmpeg(video_path, srt_path, output_path, font='NanumGothic'):
+    """Add subtitles to video using ffmpeg with progress bar"""
+    print(f"Adding subtitles to video...")
+    
+    try:
+        # Get video dimensions and duration
         width, height = get_video_dimensions(video_path)
+        duration = get_video_duration_seconds(video_path)
         font_size = calculate_font_size(width)
         
         print(f"Video dimensions: {width}x{height}")
-        print(f"Calculated font size: {font_size}")
+        print(f"Video duration: {duration:.2f} seconds")
         
-        # Normalize paths and escape special characters
-        video_path = os.path.normpath(video_path)
-        srt_path = os.path.normpath(srt_path)
-        output_path = os.path.normpath(output_path)
+        # Calculate total frames for progress tracking
+        total_frames = calculate_total_frames(video_path)
+        print(f"Total frames to process: {total_frames}")
         
-        # On Windows, convert backslashes to forward slashes for ffmpeg
-        if os.name == 'nt':
-            video_path = video_path.replace('\\', '/')
-            srt_path = srt_path.replace('\\', '/')
-            output_path = output_path.replace('\\', '/')
-
-        # Escape special characters in paths
-        srt_path = srt_path.replace("'", "'\\''")
+        # Prepare file paths
+        def prepare_path(path):
+            path = path.replace('\\', '/')
+            if ' ' in path or '(' in path or ')' in path:
+                path = f"'{path}'"
+            return path
+            
+        video_path = prepare_path(video_path)
+        srt_path = prepare_path(srt_path)
+        output_path = prepare_path(output_path)
         
-        # Construct subtitle filter with escaped paths
-        subtitle_filter = f"subtitles='{srt_path}'"
+        # Construct subtitle filter
+        subtitle_filter = f"subtitles={srt_path}"
         style = f":force_style='Fontname={font},FontSize={font_size},PrimaryColour=&HFFFFFF,OutlineColour=&H40000000,BorderStyle=3,Outline=1,Shadow=0,MarginV=35'"
         
-        # Construct complete ffmpeg command
+        # Create command
         command = [
             'ffmpeg',
             '-i', video_path,
-            '-vf', subtitle_filter + style,
+            '-vf', f"{subtitle_filter}{style}",
             '-c:a', 'copy',
             '-y',
             output_path
         ]
         
-        print("Executing command:", ' '.join(command))  # Debug print
-        
-        # Create startupinfo to hide console window on Windows
-        startupinfo = None
-        if os.name == 'nt':
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        
-        # Run ffmpeg command
+        # Start process with output capture
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            startupinfo=startupinfo
+            universal_newlines=True
         )
         
-        # Read output using binary mode and decode manually
-        stdout_data, stderr_data = process.communicate()
-        
-        # Check if the process was successful
-        if process.returncode != 0:
-            error_message = stderr_data.decode('utf-8', errors='replace')
-            if "No such file or directory" in error_message:
-                print(f"Debug - Checking file existence:")
-                print(f"Video exists: {os.path.exists(video_path)}")
-                print(f"SRT exists: {os.path.exists(srt_path)}")
-                print(f"Output directory exists: {os.path.exists(os.path.dirname(output_path))}")
-            raise RuntimeError(f"Error adding subtitles: {error_message}")
+        # Setup progress bar
+        with tqdm(total=total_frames, unit='frames', desc="Processing", 
+                 bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} frames [{elapsed}<{remaining}]') as pbar:
+            current_frame = 0
             
-        print(f"Video with translated subtitles saved to: {output_path}")
+            # Monitor output and update progress
+            while True:
+                line = process.stderr.readline()
+                
+                if line == '' and process.poll() is not None:
+                    break
+                    
+                if line:
+                    # Parse frame count from ffmpeg output
+                    frame_match = re.search(r'frame=\s*(\d+)', line)
+                    if frame_match:
+                        new_frame = int(frame_match.group(1))
+                        if new_frame > current_frame:
+                            increment = new_frame - current_frame
+                            pbar.update(increment)
+                            current_frame = new_frame
+            
+            # Get final return code
+            rc = process.poll()
+            if rc != 0:
+                stderr = process.stderr.read()
+                raise RuntimeError(f"ffmpeg process failed with error:\n{stderr}")
+        
+        print(f"\nVideo with translated subtitles saved to: {output_path}")
         
     except Exception as e:
-        print(f"Error adding subtitles: {str(e)}")
-        if os.path.exists(output_path):
-            os.remove(output_path)
+        print(f"\nError adding subtitles: {str(e)}")
+        raise
+    
+def get_video_duration(video_path):
+    """Get exact video duration using ffprobe"""
+    try:
+        command = [
+            'ffprobe',
+            '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'json',
+            video_path
+        ]
+        
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        
+        stdout_data, _ = process.communicate()
+        duration_info = json.loads(stdout_data)
+        return float(duration_info['format']['duration'])
+    except Exception as e:
+        print(f"Error getting video duration: {str(e)}")
         raise
 
 
@@ -540,12 +1100,16 @@ def main():
 
     # Transcribe audio from video
     print("Transcribing audio...")
+    video_duration = get_video_duration(video_path)
+    print(f"Video duration: {video_duration:.2f} seconds")
+    
+    # Modified transcription call
     if args.use_local_whisper:
         print("Using local whisper model")
         transcript = transcribe_audio(video_path, args.models_path)
     else:
         print("Using OpenAI API whisper model")
-        transcript = transcribe_audio_chatgpt(client, video_path)
+        transcript = transcribe_audio_chatgpt(client, video_path, video_duration)
     print(f"Audio transcribed!\n")
     print(transcript)
 
